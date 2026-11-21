@@ -412,6 +412,9 @@ def _get_clang_version() -> str:
         )
         return output
     except (subprocess.CalledProcessError, FileNotFoundError) as e:
+        if IS_WINDOWS:
+            # Windows compiles with MSVC (CC/CXX are unset above); clang is only reported
+            return "not installed (MSVC build)"
         err_msg = str(e) if isinstance(e, FileNotFoundError) else e.stderr.decode()
         raise RuntimeError(
             f"You are installing from source which requires the Clang compiler to be installed.\nError running clang: {err_msg}",
