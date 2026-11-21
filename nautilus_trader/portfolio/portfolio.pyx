@@ -159,6 +159,7 @@ cdef class Portfolio(PortfolioFacade):
         self._snapshot_last_per_position: dict[PositionId, Money] = {}
         self._snapshot_processed_counts: dict[PositionId, int] = {}
         self._snapshot_account_ids: dict[PositionId, AccountId] = {}
+        self._snapshot_position_instruments: dict[PositionId, InstrumentId] = {}
         self._net_positions: dict[InstrumentId, dict[AccountId, Decimal]] = {}
         self._bet_positions: dict[InstrumentId, object] = {}
         self._index_bet_positions: dict[InstrumentId, set[PositionId]] = defaultdict(set)
@@ -784,6 +785,7 @@ cdef class Portfolio(PortfolioFacade):
         self._snapshot_last_per_position.clear()
         self._snapshot_processed_counts.clear()
         self._snapshot_account_ids.clear()
+        self._snapshot_position_instruments.clear()
         self._venues_missing_price.clear()
         self.analyzer.reset()
 
@@ -2305,6 +2307,9 @@ cdef class Portfolio(PortfolioFacade):
         # Get all position IDs that have snapshots for this instrument
         cdef set[PositionId] snapshot_position_ids = self._cache.position_snapshot_ids(instrument_id)
         if not snapshot_position_ids:
+            # Every snapshot of this instrument may have been purged: drop its counts
+            if self._prune_stale_snapshot_counts(instrument_id, snapshot_position_ids):
+                self._realized_pnls.pop(instrument_id, None)
             return  # Nothing to process
 
         cdef bint rebuild = False
@@ -2323,6 +2328,7 @@ cdef class Portfolio(PortfolioFacade):
             position_id_snapshots = self._cache.position_snapshot_bytes(position_id)
             curr_count = len(position_id_snapshots)
             snapshot_data[position_id] = position_id_snapshots
+            self._snapshot_position_instruments[position_id] = instrument_id
 
             prev_count = self._snapshot_processed_counts.get(position_id, 0)
             if prev_count > curr_count:
@@ -2420,26 +2426,36 @@ cdef class Portfolio(PortfolioFacade):
 
                 self._snapshot_processed_counts[position_id] = curr_count
 
-        # Prune stale entries (positions that no longer have snapshots)
+        # Prune stale entries (positions of this instrument that no longer have snapshots)
+        if self._prune_stale_snapshot_counts(instrument_id, snapshot_position_ids):
+            has_purge = True
+
+        # Invalidate PnL cache when snapshots change (new snapshots or purges)
+        if has_new_snapshots or has_purge:
+            self._realized_pnls.pop(instrument_id, None)
+
+    cdef bint _prune_stale_snapshot_counts(self, InstrumentId instrument_id, set snapshot_position_ids):
+        # Only positions recorded for this instrument are candidates. The snapshot IDs passed
+        # in are this instrument's only, so checking another instrument's counts against them
+        # would drop those counts and force a full re-unpickle of that instrument's history on
+        # its next update (the cost then grows with run length once two instruments trade).
         cdef list[PositionId] stale_ids = []
         cdef PositionId stale_position_id
         for stale_position_id in self._snapshot_processed_counts:
-            if stale_position_id not in snapshot_position_ids:
+            if (
+                self._snapshot_position_instruments.get(stale_position_id) == instrument_id
+                and stale_position_id not in snapshot_position_ids
+            ):
                 stale_ids.append(stale_position_id)
-
-        # If positions were purged, invalidate PnL cache
-        if stale_ids:
-            has_purge = True
 
         for stale_position_id in stale_ids:
             self._snapshot_processed_counts.pop(stale_position_id, None)
             self._snapshot_sum_per_position.pop(stale_position_id, None)
             self._snapshot_last_per_position.pop(stale_position_id, None)
             self._snapshot_account_ids.pop(stale_position_id, None)
+            self._snapshot_position_instruments.pop(stale_position_id, None)
 
-        # Invalidate PnL cache when snapshots change (new snapshots or purges)
-        if has_new_snapshots or has_purge:
-            self._realized_pnls.pop(instrument_id, None)
+        return len(stale_ids) > 0
 
     cdef tuple _process_snapshot_pnl_contributions(
         self,

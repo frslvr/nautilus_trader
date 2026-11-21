@@ -61,6 +61,7 @@ cdef class Portfolio(PortfolioFacade):
     cdef dict[PositionId, Money] _snapshot_last_per_position
     cdef dict[PositionId, int] _snapshot_processed_counts
     cdef dict[PositionId, AccountId] _snapshot_account_ids
+    cdef dict[PositionId, InstrumentId] _snapshot_position_instruments
     cdef dict[InstrumentId, dict[AccountId, Decimal]] _net_positions
     cdef dict[PositionId, object] _bet_positions
     cdef object _index_bet_positions
@@ -95,6 +96,7 @@ cdef class Portfolio(PortfolioFacade):
     cdef void _update_net_position(self, InstrumentId instrument_id, list positions_open)
     cdef object _net_position(self, InstrumentId instrument_id, AccountId account_id=*)
     cdef void _ensure_snapshot_pnls_cached_for(self, InstrumentId instrument_id)
+    cdef bint _prune_stale_snapshot_counts(self, InstrumentId instrument_id, set snapshot_position_ids)
     cdef Price _get_price(self, Position position)
     cdef object _get_xrate_to_account_base(self, Instrument instrument, Account account, InstrumentId instrument_id)
     cdef dict _group_by_account_id(self, list items)
